@@ -146,8 +146,8 @@ async function startDiscord() {
     return;
   }
   discordStatus = "loading discord.js";
-  // Dynamic import so Deno.serve (above) is already listening before discord.js downloads.
-  const { Client, GatewayIntentBits } = await import("npm:discord.js@14");
+  // Loaded from ./node_modules (installed by `npm install`), so no runtime downloads are needed.
+  const { Client, GatewayIntentBits } = await import("discord.js");
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
   const commands = [
     { name: "ping", description: "Ping a random worker node" },
