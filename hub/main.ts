@@ -1,4 +1,3 @@
-import { Client, GatewayIntentBits } from "npm:discord.js@14";
 import { idFromToken, type ToHub, type ToWorker } from "../shared/protocol.ts";
 import { loadState, STATE_DIR } from "../shared/state.ts";
 
@@ -122,6 +121,8 @@ function runJob(cmd: string, args: string[] = []) {
 }
 
 // ---------- Discord ----------
+// Dynamic import so Deno.serve (above) is already listening before discord.js downloads.
+const { Client, GatewayIntentBits } = await import("npm:discord.js@14");
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const commands = [
   { name: "ping", description: "Ping a random worker node" },
