@@ -1,0 +1,7 @@
+{
+  "tasks": {
+    "hub": "deno run -A hub/main.ts",
+    "worker": "deno run --allow-net --allow-env --allow-read=.worker-token --allow-write=.worker-token --allow-sys=hostname worker/main.ts",
+    "admin": "deno run --allow-read=data --allow-write=data admin.ts"
+  }
+}
