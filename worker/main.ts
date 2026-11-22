@@ -1,4 +1,5 @@
 import { idFromToken, type ToHub, type ToWorker } from "../shared/protocol.ts";
+import { handlers } from "./commands.ts";
 
 const HUB_URL = Deno.env.get("HUB_URL"); // e.g. wss://your-repl.replit.app/connect
 if (!HUB_URL) throw new Error("Set HUB_URL");
@@ -15,11 +16,7 @@ async function getToken(): Promise<string> {
   }
 }
 
-// Add commands here.
-const handlers: Record<string, (args: string[]) => string | Promise<string>> = {
-  ping: () => `pong from ${Deno.hostname()} (${Deno.build.os}/${Deno.build.arch})`,
-};
-
+// Commands live in worker/commands.ts.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const token = await getToken();
 console.log(`node id: ${await idFromToken(token)} (name: ${NAME})`);

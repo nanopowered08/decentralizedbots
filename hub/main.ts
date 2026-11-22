@@ -1,11 +1,14 @@
 import { idFromToken, type ToHub, type ToWorker } from "../shared/protocol.ts";
 import { loadState, STATE_DIR } from "../shared/state.ts";
+import { checkAccess, COMMAND_DEFS, handleCommand } from "./commands.ts";
 
 const DISCORD_TOKEN = Deno.env.get("DISCORD_TOKEN");
 let discordStatus = "starting"; // shown on the landing page so problems are visible without logs
 const PORT = Number(Deno.env.get("PORT") ?? 8000);
 const GUILD_ID = Deno.env.get("GUILD_ID"); // optional: instant slash-command registration
 const MAX_PENDING = 20;
+// Discord user ids allowed to use /run and /fetch (comma separated). Empty = those commands are disabled.
+const OWNER_IDS = new Set((Deno.env.get("OWNER_IDS") ?? "").split(",").map((x) => x.trim()).filter(Boolean));
 
 interface Node {
   id: string;
@@ -107,24 +110,29 @@ code{background:#8882;padding:.1em .35em;border-radius:4px}</style></head><body>
 connect to <code>/connect</code> over WebSocket and run jobs for it. Every worker has to be approved by the owner.</p>
 <p><b>Status:</b> hub is up · ${online} approved node${online === 1 ? "" : "s"} online</p>
 <p><b>Discord:</b> ${discordStatus.replace(/</g, "&lt;")}</p>
-<p>Slash commands: <code>/ping</code>, <code>/nodes</code></p>
+<p>Slash commands: <code>/ping</code>, <code>/nodes</code>, <code>/sysinfo</code>, <code>/run</code>, <code>/fetch</code></p>
 </body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 });
 watchState().catch((e) => console.error("[watchState] failed:", e));
 
 // ---------- dispatch ----------
-function runJob(cmd: string, args: string[] = []) {
-  const ready = [...nodes.values()].filter((n) => n.approved);
-  if (!ready.length) return Promise.reject(new Error("No nodes online."));
-  const node = ready[Math.floor(Math.random() * ready.length)];
+function runJob(cmd: string, args: string[] = [], target?: string | null, timeoutMs = 10_000) {
+  let pool = [...nodes.values()].filter((n) => n.approved);
+  if (!pool.length) return Promise.reject(new Error("No nodes online."));
+  if (target) {
+    const t = target.trim().toLowerCase();
+    pool = pool.filter((n) => n.id === t || n.name.toLowerCase() === t);
+    if (!pool.length) return Promise.reject(new Error(`No online node matches "${target}".`));
+  }
+  const node = pool[Math.floor(Math.random() * pool.length)];
   const id = crypto.randomUUID();
   const start = performance.now();
   return new Promise<{ node: Node; ok: boolean; output: string; ms: number }>((resolve, reject) => {
     const timer = setTimeout(() => {
       jobs.delete(id);
       reject(new Error(`${node.name} timed out.`));
-    }, 10_000);
+    }, timeoutMs);
     jobs.set(id, (r) => {
       clearTimeout(timer);
       resolve({ node, ...r, ms: Math.round(performance.now() - start) });
@@ -149,32 +157,29 @@ async function startDiscord() {
   // Loaded from ./node_modules (installed by `npm install`), so no runtime downloads are needed.
   const { Client, GatewayIntentBits } = await import("discord.js");
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-  const commands = [
-    { name: "ping", description: "Ping a random worker node" },
-    { name: "nodes", description: "List approved nodes that are online" },
-  ];
-
   client.once("ready", async () => {
     discordStatus = `online as ${client.user?.tag}`;
     console.log(`Logged in as ${client.user?.tag}`);
-    if (GUILD_ID) await client.guilds.cache.get(GUILD_ID)?.commands.set(commands);
-    else await client.application?.commands.set(commands);
+    if (GUILD_ID) await client.guilds.cache.get(GUILD_ID)?.commands.set(COMMAND_DEFS);
+    else await client.application?.commands.set(COMMAND_DEFS);
   });
+
+  const deps = {
+    runJob,
+    onlineNodes: () => [...nodes.values()].filter((n) => n.approved),
+    ownerIds: OWNER_IDS,
+  };
 
   client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
-    if (i.commandName === "nodes") {
-      const list = [...nodes.values()].filter((n) => n.approved).map((n) => `• ${n.name} (\`${n.id}\`)`);
-      await i.reply(list.length ? list.join("\n") : "No nodes online.");
-    } else if (i.commandName === "ping") {
-      await i.deferReply();
-      try {
-        const r = await runJob("ping");
-        await i.editReply(`🏓 **${r.node.name}** (\`${r.node.id}\`): ${r.output} · ${r.ms}ms round trip`);
-      } catch (e) {
-        await i.editReply(`⚠️ ${(e as Error).message}`);
-      }
+    const denied = checkAccess(deps, i.commandName, i.user.id);
+    if (denied) {
+      await i.reply({ content: denied, flags: 64 }); // 64 = ephemeral
+      return;
     }
+    await i.deferReply();
+    const text = await handleCommand(deps, i.commandName, (k) => i.options.getString(k));
+    await i.editReply(text.slice(0, 1990));
   });
 
   discordStatus = "logging in";
