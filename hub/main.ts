@@ -96,7 +96,19 @@ Deno.serve({ port: PORT }, (req) => {
     handleSocket(socket);
     return response;
   }
-  return new Response("hub ok");
+  if (url.pathname === "/health") return new Response("ok");
+  const online = [...nodes.values()].filter((n) => n.approved).length;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>nodebot hub</title>
+<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;line-height:1.5}
+code{background:#8882;padding:.1em .35em;border-radius:4px}</style></head><body>
+<h1>nodebot hub 🐧💻</h1>
+<p>This is the hub for a semi-decentralized Discord bot. The hub holds the Discord token; worker nodes
+connect to <code>/connect</code> over WebSocket and run jobs for it. Every worker has to be approved by the owner.</p>
+<p><b>Status:</b> hub is up · ${online} approved node${online === 1 ? "" : "s"} online</p>
+<p>Slash commands: <code>/ping</code>, <code>/nodes</code></p>
+</body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 });
 watchState();
 
