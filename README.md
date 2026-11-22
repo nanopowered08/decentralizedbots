@@ -15,3 +15,12 @@ It prints its node id and waits as `pending` until you approve it. Identity is a
 
 ## Commands
 `/ping` runs on a random approved node. `/nodes` lists them. Add worker commands in `worker/main.ts` (`handlers`).
+
+## Replit deployment note
+Deployments can't reach npm at runtime, so discord.js is installed at build time into `node_modules/`.
+In `.replit`:
+
+    [deployment]
+    deploymentTarget = "cloudrun"
+    build = ["sh", "-c", "deno install"]
+    run = ["sh", "-c", "PORT=8000 deno task hub"]

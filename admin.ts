@@ -1,8 +1,8 @@
 // Run in the Replit shell:  deno task admin approve <id>
-import { loadState, saveState } from "./shared/state.ts";
+import { loadFileState, saveState } from "./shared/state.ts";
 
 const [action, id] = Deno.args;
-const st = await loadState();
+const st = await loadFileState();
 
 if (action === "list" || !action) {
   console.log("approved:", st.approved.join(", ") || "(none)");
