@@ -2,7 +2,7 @@ import { idFromToken, type ToHub, type ToWorker } from "../shared/protocol.ts";
 import { loadState, STATE_DIR } from "../shared/state.ts";
 
 const DISCORD_TOKEN = Deno.env.get("DISCORD_TOKEN");
-if (!DISCORD_TOKEN) throw new Error("Set DISCORD_TOKEN");
+let discordStatus = "starting"; // shown on the landing page so problems are visible without logs
 const PORT = Number(Deno.env.get("PORT") ?? 8000);
 const GUILD_ID = Deno.env.get("GUILD_ID"); // optional: instant slash-command registration
 const MAX_PENDING = 20;
@@ -106,11 +106,12 @@ code{background:#8882;padding:.1em .35em;border-radius:4px}</style></head><body>
 <p>This is the hub for a semi-decentralized Discord bot. The hub holds the Discord token; worker nodes
 connect to <code>/connect</code> over WebSocket and run jobs for it. Every worker has to be approved by the owner.</p>
 <p><b>Status:</b> hub is up · ${online} approved node${online === 1 ? "" : "s"} online</p>
+<p><b>Discord:</b> ${discordStatus.replace(/</g, "&lt;")}</p>
 <p>Slash commands: <code>/ping</code>, <code>/nodes</code></p>
 </body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 });
-watchState();
+watchState().catch((e) => console.error("[watchState] failed:", e));
 
 // ---------- dispatch ----------
 function runJob(cmd: string, args: string[] = []) {
@@ -133,34 +134,54 @@ function runJob(cmd: string, args: string[] = []) {
 }
 
 // ---------- Discord ----------
-// Dynamic import so Deno.serve (above) is already listening before discord.js downloads.
-const { Client, GatewayIntentBits } = await import("npm:discord.js@14");
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const commands = [
-  { name: "ping", description: "Ping a random worker node" },
-  { name: "nodes", description: "List approved nodes that are online" },
-];
-
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user?.tag}`);
-  if (GUILD_ID) await client.guilds.cache.get(GUILD_ID)?.commands.set(commands);
-  else await client.application?.commands.set(commands);
+globalThis.addEventListener("unhandledrejection", (e) => {
+  console.error("[unhandledrejection]", e.reason);
+  e.preventDefault();
 });
 
-client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand()) return;
-  if (i.commandName === "nodes") {
-    const list = [...nodes.values()].filter((n) => n.approved).map((n) => `• ${n.name} (\`${n.id}\`)`);
-    await i.reply(list.length ? list.join("\n") : "No nodes online.");
-  } else if (i.commandName === "ping") {
-    await i.deferReply();
-    try {
-      const r = await runJob("ping");
-      await i.editReply(`🏓 **${r.node.name}** (\`${r.node.id}\`): ${r.output} · ${r.ms}ms round trip`);
-    } catch (e) {
-      await i.editReply(`⚠️ ${(e as Error).message}`);
-    }
+async function startDiscord() {
+  if (!DISCORD_TOKEN) {
+    discordStatus = "DISCORD_TOKEN is not set in this environment (add it to the deployment secrets)";
+    console.error(`[discord] ${discordStatus}`);
+    return;
   }
-});
+  discordStatus = "loading discord.js";
+  // Dynamic import so Deno.serve (above) is already listening before discord.js downloads.
+  const { Client, GatewayIntentBits } = await import("npm:discord.js@14");
+  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const commands = [
+    { name: "ping", description: "Ping a random worker node" },
+    { name: "nodes", description: "List approved nodes that are online" },
+  ];
 
-client.login(DISCORD_TOKEN);
+  client.once("ready", async () => {
+    discordStatus = `online as ${client.user?.tag}`;
+    console.log(`Logged in as ${client.user?.tag}`);
+    if (GUILD_ID) await client.guilds.cache.get(GUILD_ID)?.commands.set(commands);
+    else await client.application?.commands.set(commands);
+  });
+
+  client.on("interactionCreate", async (i) => {
+    if (!i.isChatInputCommand()) return;
+    if (i.commandName === "nodes") {
+      const list = [...nodes.values()].filter((n) => n.approved).map((n) => `• ${n.name} (\`${n.id}\`)`);
+      await i.reply(list.length ? list.join("\n") : "No nodes online.");
+    } else if (i.commandName === "ping") {
+      await i.deferReply();
+      try {
+        const r = await runJob("ping");
+        await i.editReply(`🏓 **${r.node.name}** (\`${r.node.id}\`): ${r.output} · ${r.ms}ms round trip`);
+      } catch (e) {
+        await i.editReply(`⚠️ ${(e as Error).message}`);
+      }
+    }
+  });
+
+  discordStatus = "logging in";
+  await client.login(DISCORD_TOKEN);
+}
+
+startDiscord().catch((e) => {
+  discordStatus = `failed: ${(e as Error).message}`;
+  console.error("[discord] failed:", e);
+});
