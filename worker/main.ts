@@ -1,5 +1,5 @@
 import { idFromToken, type ToHub, type ToWorker } from "../shared/protocol.ts";
-import { handlers } from "./commands.ts";
+import { commandInfo, handlers } from "./commands.ts";
 
 const HUB_URL = Deno.env.get("HUB_URL"); // e.g. wss://your-repl.replit.app/connect
 if (!HUB_URL) throw new Error("Set HUB_URL");
@@ -28,7 +28,7 @@ while (true) {
     const send = (m: ToHub) => ws.send(JSON.stringify(m));
     ws.onopen = () => {
       delay = 1000;
-      send({ t: "hello", token, name: NAME });
+      send({ t: "hello", token, name: NAME, commands: commandInfo });
     };
     ws.onmessage = async (e) => {
       const m = JSON.parse(e.data) as ToWorker;

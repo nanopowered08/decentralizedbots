@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nodebot dashboard</title>
+<style>
+:root{--bg:#f6f6f7;--fg:#1b1b1f;--card:#fff;--line:#d9d9e0;--muted:#6b6b76;--accent:#2563eb;--ok:#15803d;--bad:#b91c1c;--warn:#b45309;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#111114;--fg:#ececf1;--card:#1a1a1f;--line:#2e2e36;--muted:#9a9aa6;--accent:#6ea0ff;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.8rem 1rem;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{font-size:1.05rem;margin:0}
+main{max-width:60rem;margin:0 auto;padding:1rem}
+h2{font-size:1.05rem;margin:1.6rem 0 .5rem}
+.hint{color:var(--muted);font-size:.9rem;margin:.2rem 0 .8rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;margin-bottom:.8rem}
+.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.grow{flex:1}
+.name{font-weight:600;font-size:1.02rem}
+code{background:#8882;padding:.05em .35em;border-radius:4px;font-size:.88em}
+.badge{font-size:.75rem;padding:.1rem .5rem;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.badge.ok{color:var(--ok);border-color:var(--ok)}.badge.bad{color:var(--bad);border-color:var(--bad)}.badge.warn{color:var(--warn);border-color:var(--warn)}
+button{font:inherit;padding:.3rem .8rem;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad);border-color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+input[type=text],select{font:inherit;padding:.3rem .5rem;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+input[type=text]{min-width:12rem}
+.cmds{margin:.6rem 0;display:grid;gap:.35rem}
+.cmd{font-size:.92rem}.cmd .desc{color:var(--muted)}
+.tag-risky{color:var(--warn);font-size:.75rem;margin-left:.3rem}
+label.chk{display:inline-flex;gap:.3rem;align-items:center;margin-right:.8rem;white-space:nowrap}
+pre{margin:.5rem 0 0;padding:.6rem;background:var(--bg);border:1px solid var(--line);border-radius:7px;white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto;font-size:.85rem}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500}
+.scroll{overflow-x:auto}
+.empty{color:var(--muted);padding:.5rem 0}
+hr{border:0;border-top:1px solid var(--line);margin:.7rem 0}
+</style>
+</head>
+<body>
+<header><h1>nodebot dashboard 🐧💻</h1><div class="row"><span id="who" class="hint" style="margin:0"></span><a href="/logout">Log out</a></div></header>
+<main>
+  <h2>Machines</h2>
+  <p class="hint">Approve or deny workers, choose which commands non-owners may run on each, and try commands right here. Owners (your <code>OWNER_IDS</code>) can always run everything a machine provides.</p>
+  <div id="machines"></div>
+
+  <h2>Who can use which machines</h2>
+  <p class="hint">A non-owner can run a command on a machine only if the machine whitelists that command <b>and</b> they (or Everyone) have that machine. "Everyone" defaults to all machines. Untick it to make access invite-only.</p>
+  <div class="card"><div class="scroll" id="access"></div></div>
+
+  <h2>Recent activity</h2>
+  <div class="card"><div class="scroll" id="activity"></div></div>
+</main>
+<script nonce="__NONCE__">
+(() => {
+  "use strict";
+  const $ = (s) => document.querySelector(s);
+  const ui = { tests: {} };
+  let S = null, lastJSON = "";
+
+  function el(tag, props, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (k === "class") e.className = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (k === "checked" || k === "disabled" || k === "value" || k === "selected") e[k] = v;
+      else e.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) {
+      if (kid == null || kid === false) continue;
+      e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    }
+    return e;
+  }
+  const badge = (text, kind) => el("span", { class: "badge " + (kind || "") }, text);
+  const btn = (label, fn, cls) => el("button", { class: cls || "", onclick: fn }, label);
+
+  async function api(path, body) {
+    const opt = body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+    const r = await fetch(path, opt);
+    if (r.status === 401) { location.href = "/login"; throw new Error("unauthorized"); }
+    return r.json();
+  }
+  const act = async (path, body) => {
+    const r = await api(path, body);
+    if (r.error) alert(r.error);
+    await refresh(true);
+  };
+
+  const isEditing = () => {
+    const a = document.activeElement;
+    return !!a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName) && a.type !== "checkbox";
+  };
+
+  async function refresh(force) {
+    let next;
+    try { next = await api("/api/state"); } catch (e) { return; }
+    const j = JSON.stringify(next);
+    if (!force && (j === lastJSON || isEditing())) return;
+    S = next; lastJSON = j;
+    render();
+  }
+
+  function render() {
+    $("#who").textContent = "Signed in as " + S.me.name;
+    renderMachines();
+    renderAccess();
+    renderActivity();
+  }
+
+  // ---------- machines ----------
+  function renderMachines() {
+    const box = $("#machines");
+    if (!S.nodes.length) { box.replaceChildren(el("div", { class: "empty" }, "No machines yet. Start a worker and it will show up here as pending.")); return; }
+    box.replaceChildren(...S.nodes.map(nodeCard));
+  }
+
+  function nodeCard(n) {
+    const approved = n.status === "approved";
+    const badges = [
+      badge(n.online ? "online" : "offline", n.online ? "ok" : ""),
+      badge(n.status, approved ? "ok" : n.status === "denied" ? "bad" : "warn"),
+    ];
+    if (n.envApproved) badges.push(badge("approved via APPROVED_NODES secret", ""));
+
+    const actions = [];
+    const node = (action) => () => act("/api/node", { id: n.id, action });
+    if (n.status !== "approved") actions.push(btn(n.status === "denied" ? "Un-deny and approve" : "Approve", node("approve"), "primary"));
+    if (approved && !n.envApproved) actions.push(btn("Revoke", node("revoke")));
+    if (n.status !== "denied") actions.push(btn("Deny", node("deny"), "danger"));
+
+    const kids = [
+      el("div", { class: "row" },
+        el("span", { class: "name" }, n.name),
+        el("code", {}, n.id),
+        badges,
+        el("span", { class: "grow" }),
+        actions),
+    ];
+
+    if (n.commands) {
+      kids.push(el("div", { class: "cmds" }, n.commands.map((c) => el("div", { class: "cmd" },
+        el("code", {}, "/" + c.name + (c.usage ? " " + c.usage : "")),
+        c.risky ? el("span", { class: "tag-risky" }, "risky") : null,
+        " ", el("span", { class: "desc" }, c.description),
+        c.detail ? el("div", { class: "desc" }, c.detail) : null))));
+      if (approved) kids.push(whitelistRow(n));
+      if (approved && n.online) kids.push(tester(n));
+    } else if (n.online) {
+      kids.push(el("div", { class: "hint" }, "This worker did not report its commands (older version). Update the worker to manage and test them here."));
+    } else if (approved) {
+      kids.push(el("div", { class: "hint" }, "Offline. Commands appear when the worker connects."));
+    }
+    return el("div", { class: "card" }, kids);
+  }
+
+  function whitelistRow(n) {
+    const known = n.commands.map((c) => c.name);
+    const boxes = known.map((name) => el("label", { class: "chk" },
+      el("input", { type: "checkbox", checked: n.whitelist.includes(name), onchange: (e) => {
+        const set = new Set(n.whitelist);
+        if (e.target.checked) set.add(name); else set.delete(name);
+        act("/api/whitelist", { id: n.id, commands: known.filter((c) => set.has(c)) });
+      } }), "/" + name));
+    return el("div", {},
+      el("hr"),
+      el("div", { class: "hint", style: "margin:0 0 .3rem" }, "Non-owners may run on this machine" + (n.whitelistIsDefault ? " (default)" : "") + ":"),
+      el("div", {}, boxes));
+  }
+
+  function tester(n) {
+    const t = ui.tests[n.id] || (ui.tests[n.id] = { cmd: n.commands[0] ? n.commands[0].name : "", args: "", out: "", busy: false });
+    if (!n.commands.some((c) => c.name === t.cmd) && n.commands[0]) t.cmd = n.commands[0].name;
+    const cur = n.commands.find((c) => c.name === t.cmd) || {};
+    const sel = el("select", { onchange: (e) => { t.cmd = e.target.value; t.out = ""; render(); } },
+      n.commands.map((c) => el("option", { value: c.name, selected: c.name === t.cmd }, "/" + c.name)));
+    const args = el("input", { type: "text", placeholder: cur.usage || "(no arguments)", value: t.args,
+      oninput: (e) => { t.args = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Enter") run(n, t); } });
+    return el("div", {},
+      el("hr"),
+      el("div", { class: "hint", style: "margin:0 0 .3rem" }, "Try a command on this machine (runs as owner, ignores the whitelist):"),
+      el("div", { class: "row" }, sel, args, btn(t.busy ? "Running…" : "Run", () => run(n, t), "primary")),
+      t.out ? el("pre", {}, t.out) : null);
+  }
+
+  async function run(n, t) {
+    if (t.busy) return;
+    t.busy = true; t.out = "running…"; render();
+    try {
+      const r = await api("/api/test", { id: n.id, command: t.cmd, args: t.args });
+      t.out = (r.error ? "[error] " + r.error : (r.ok ? "" : "[failed] ") + r.output + (r.ms ? "\n(" + r.ms + " ms)" : ""));
+    } catch (e) { t.out = String(e); }
+    t.busy = false; render();
+    refresh(true);
+  }
+
+  // ---------- access ----------
+  function renderAccess() {
+    const approved = S.nodes.filter((n) => n.status === "approved");
+    const save = (user, nodes) => act("/api/grant", { user, nodes });
+    const rows = S.grants.map((g) => {
+      const all = g.nodes === "*";
+      const allBox = el("input", { type: "checkbox", checked: all, onchange: (e) => save(g.user, e.target.checked ? "*" : []) });
+      const boxes = approved.map((n) => el("label", { class: "chk" },
+        el("input", { type: "checkbox", checked: all || g.nodes.includes(n.id), disabled: all, onchange: () => {
+          const picked = [...document.querySelectorAll('input[data-u="' + g.user + '"]')].filter((b) => b.checked).map((b) => b.dataset.n);
+          save(g.user, picked);
+        }, "data-u": g.user, "data-n": n.id }), n.name));
+      const who = g.user === "*"
+        ? el("span", {}, el("b", {}, "Everyone"), g.isDefault ? el("span", { class: "hint" }, " (default)") : null)
+        : el("span", {}, g.name ? el("b", {}, g.name + " ") : null, el("code", {}, g.user));
+      return el("tr", {}, el("td", {}, who),
+        el("td", {}, el("label", { class: "chk" }, allBox, "All machines"), boxes.length ? boxes : el("span", { class: "hint" }, "no approved machines yet")),
+        el("td", {}, g.user === "*" ? null : btn("Remove", () => act("/api/grant/delete", { user: g.user }), "danger")));
+    });
+    const idIn = el("input", { type: "text", placeholder: "Discord user id", inputmode: "numeric" });
+    const add = el("div", { class: "row", style: "margin-top:.7rem" }, idIn,
+      btn("Add user", () => { const v = idIn.value.trim(); if (v) save(v, []); }),
+      el("span", { class: "hint", style: "margin:0" }, "Discord: Settings > Advanced > Developer Mode, then right-click a user > Copy User ID"));
+    $("#access").replaceChildren(
+      el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "User"), el("th", {}, "Machines they can use"), el("th"))), el("tbody", {}, rows)),
+      add);
+  }
+
+  // ---------- activity ----------
+  function renderActivity() {
+    const box = $("#activity");
+    if (!S.activity.length) { box.replaceChildren(el("div", { class: "empty" }, "Nothing yet.")); return; }
+    box.replaceChildren(el("table", {},
+      el("thead", {}, el("tr", {}, ["Time", "User", "Via", "Machine", "Command", "Result"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, S.activity.map((a) => el("tr", {},
+        el("td", {}, new Date(a.t).toLocaleTimeString()),
+        el("td", {}, a.user), el("td", {}, a.via), el("td", {}, a.node),
+        el("td", {}, el("code", {}, "/" + a.cmd + (a.args ? " " + a.args : ""))),
+        el("td", {}, (a.ok ? "ok" : "failed") + (a.ms ? " · " + a.ms + " ms" : "")))))));
+  }
+
+  refresh(true);
+  setInterval(() => refresh(false), 3000);
+})();
+</script>
+</body>
+</html>

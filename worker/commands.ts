@@ -1,4 +1,6 @@
-// Commands a worker can execute. Add new ones to `handlers`.
+// Commands a worker can execute. Add new ones to `handlers` AND `commandInfo`.
+import type { CommandInfo } from "../shared/protocol.ts";
+
 export type Handler = (args: string[]) => string | Promise<string>;
 
 // /run only works for programs listed here (comma separated). Empty = /run disabled on this node.
@@ -142,3 +144,22 @@ export const handlers: Record<string, Handler> = {
   run,
   fetch: fetchUrl,
 };
+
+// What this worker tells the hub (and the dashboard) about its commands.
+export const commandInfo: CommandInfo[] = [
+  { name: "ping", description: "Round-trip check; returns this node's hostname and OS." },
+  { name: "sysinfo", description: "OS, CPU count, memory, load and uptime." },
+  {
+    name: "run",
+    description: "Run an allowlisted program on this node. No shell, 8 second timeout.",
+    usage: "<program> [args]",
+    risky: true,
+    detail: `allowed programs: ${ALLOW_RUN.join(", ") || "none (disabled on this node)"}`,
+  },
+  {
+    name: "fetch",
+    description: "HTTP GET from this node's network. Local/private addresses are blocked.",
+    usage: "<url>",
+    risky: true,
+  },
+];
