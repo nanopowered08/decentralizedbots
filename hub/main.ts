@@ -128,7 +128,7 @@ async function watchState() {
 const toInfo = (n: Node): NodeInfo => ({ id: n.id, name: n.name, commands: n.commands?.map((c) => c.name) });
 
 function runJob(cmd: string, args: string[] = [], opts: JobOpts = {}) {
-  const { target, timeoutMs = 60_000, user = "?", via = "discord", quiet = false, allow } = opts;
+  const { target, timeoutMs = 65_000, user = "?", via = "discord", quiet = false, allow } = opts;
   const log = (node: string, ok: boolean, ms: number) => {
     if (quiet) return;
     activity.unshift({ t: Date.now(), user, via, node, cmd, args: args.join(" ").slice(0, 120), ok, ms });
