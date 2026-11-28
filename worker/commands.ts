@@ -50,7 +50,7 @@ async function run(args: string[]): Promise<string> {
     args: rest,
     stdout: "piped",
     stderr: "piped",
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(60_000),
   }).output();
   const dec = new TextDecoder();
   const text = (dec.decode(out.stdout) + dec.decode(out.stderr)).trim();
@@ -123,7 +123,7 @@ async function fetchUrl([raw]: string[]): Promise<string> {
   // Redirects are reported, not followed, so a public URL can't bounce us onto the LAN.
   const res = await fetch(u, {
     redirect: "manual",
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(60_000),
     headers: { "user-agent": "nodebot-worker" },
   });
   const ms = Math.round(performance.now() - t0);
@@ -151,7 +151,7 @@ export const commandInfo: CommandInfo[] = [
   { name: "sysinfo", description: "OS, CPU count, memory, load and uptime." },
   {
     name: "run",
-    description: "Run an allowlisted program on this node. No shell, 8 second timeout.",
+    description: "Run an allowlisted program on this node. No shell, 60 second timeout.",
     usage: "<program> [args]",
     risky: true,
     detail: `allowed programs: ${ALLOW_RUN.join(", ") || "none (disabled on this node)"}`,
