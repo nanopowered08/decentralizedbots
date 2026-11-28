@@ -7,6 +7,7 @@ export type Handler = (args: string[]) => string | Promise<string>;
 const ALLOW_RUN = (Deno.env.get("ALLOW_RUN") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 
 const MAX_BODY = 64 * 1024;
+const MAX_RUN_BYTES = 16 * 1024; // most /run output we keep in memory (stdout + stderr together)
 const cap = (s: string, n = 1500) => (s.length > n ? s.slice(0, n) + "\n…(truncated)" : s);
 
 // ---------- /sysinfo ----------
@@ -46,15 +47,52 @@ async function run(args: string[]): Promise<string> {
   if (!ALLOW_RUN.length) throw new Error("this node has no ALLOW_RUN list, so /run is disabled here");
   if (!ALLOW_RUN.includes(prog)) throw new Error(`'${prog}' is not in this node's ALLOW_RUN list`);
   // No shell: arguments are passed straight to the program, so no pipes, && or $(...) tricks.
-  const out = await new Deno.Command(prog, {
-    args: rest,
-    stdout: "piped",
-    stderr: "piped",
-    signal: AbortSignal.timeout(60_000),
-  }).output();
+  const signal = AbortSignal.timeout(60_000);
+  const child = new Deno.Command(prog, { args: rest, stdout: "piped", stderr: "piped", signal }).spawn();
+
+  // Read the output as it arrives and stop at MAX_RUN_BYTES, instead of .output() which
+  // buffers everything first (a program that prints forever would eat all the RAM).
+  let left = MAX_RUN_BYTES;
+  let truncated = false;
+  const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+  const stop = () => {
+    try {
+      child.kill("SIGKILL");
+    } catch { /* already exited */ }
+    for (const r of readers) r.cancel().catch(() => {});
+  };
+  const collect = async (stream: ReadableStream<Uint8Array>): Promise<Uint8Array> => {
+    const reader = stream.getReader();
+    readers.push(reader);
+    const chunks: Uint8Array[] = [];
+    let n = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = Math.min(value.length, left);
+      if (take) chunks.push(value.subarray(0, take));
+      n += take;
+      left -= take;
+      if (take < value.length) {
+        truncated = true;
+        stop();
+        break;
+      }
+    }
+    const all = new Uint8Array(n);
+    let o = 0;
+    for (const c of chunks) {
+      all.set(c, o);
+      o += c.length;
+    }
+    return all;
+  };
+
+  const [out, err, status] = await Promise.all([collect(child.stdout), collect(child.stderr), child.status]);
+  if (signal.aborted) throw new Error("timed out after 60s");
   const dec = new TextDecoder();
-  const text = (dec.decode(out.stdout) + dec.decode(out.stderr)).trim();
-  return cap(`${text || "(no output)"}\n[exit ${out.code}]`);
+  const text = (dec.decode(out) + dec.decode(err)).trim();
+  return cap(`${text || "(no output)"}${truncated ? "\n(output limit reached, process killed)" : ""}\n[exit ${status.code}]`);
 }
 
 // ---------- /fetch ----------

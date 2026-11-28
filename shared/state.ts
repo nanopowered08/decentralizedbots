@@ -14,7 +14,7 @@ export interface State {
   names: Record<string, string>; // last seen name of approved nodes
 }
 
-export const NODE_ID_RE = /^[0-9a-f]{8}$/;
+export const NODE_ID_RE = /^[0-9a-f]{32}$/;
 export const USER_ID_RE = /^(\*|\d{5,25})$/;
 
 export const emptyState = (): State => ({ approved: [], denied: [], whitelist: {}, grants: {}, names: {} });

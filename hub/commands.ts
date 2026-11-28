@@ -1,4 +1,6 @@
 // Slash command definitions and logic. Kept free of discord.js so it can be tested on its own.
+import { shortId } from "../shared/protocol.ts";
+
 const STRING = 3; // Discord option type
 
 const nodeOpt = { type: STRING, name: "node", description: "Node name or id (default: random)", required: false };
@@ -61,7 +63,7 @@ export function checkAccess(d: Deps, command: string, user: Caller): string | nu
 }
 
 export const fence = (s: string) => "```\n" + s.replaceAll("```", "`\u200b``").slice(0, 1700) + "\n```";
-const tag = (n: NodeInfo) => `**${n.name}** (\`${n.id}\`)`;
+const tag = (n: NodeInfo) => `**${n.name}** (\`${shortId(n.id)}\`)`;
 
 // Never throws; always returns text to send back.
 export async function handleCommand(
@@ -88,7 +90,7 @@ export async function handleCommand(
         }
       }));
       rows.sort((a, b) => (a.ms ?? Infinity) - (b.ms ?? Infinity));
-      return rows.map((r) => `• ${r.n.name} (\`${r.n.id}\`): ${r.ms === null ? "no response" : r.ms + " ms"}`).join("\n");
+      return rows.map((r) => `• ${r.n.name} (\`${shortId(r.n.id)}\`): ${r.ms === null ? "no response" : r.ms + " ms"}`).join("\n");
     }
     if (command === "ping") {
       const r = await d.runJob("ping", [], { ...base, target });

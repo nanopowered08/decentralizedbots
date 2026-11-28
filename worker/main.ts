@@ -11,7 +11,7 @@ async function getToken(): Promise<string> {
     return (await Deno.readTextFile(TOKEN_FILE)).trim();
   } catch {
     const t = crypto.randomUUID() + crypto.randomUUID();
-    await Deno.writeTextFile(TOKEN_FILE, t);
+    await Deno.writeTextFile(TOKEN_FILE, t, { mode: 0o600 }); // the token is the node's password
     return t;
   }
 }
@@ -20,6 +20,10 @@ async function getToken(): Promise<string> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const token = await getToken();
 console.log(`node id: ${await idFromToken(token)} (name: ${NAME})`);
+
+// At most this many jobs at once; each /run can start a subprocess.
+const MAX_ACTIVE = 4;
+let active = 0;
 
 let delay = 1000;
 while (true) {
@@ -31,17 +35,30 @@ while (true) {
       send({ t: "hello", token, name: NAME, commands: commandInfo });
     };
     ws.onmessage = async (e) => {
-      const m = JSON.parse(e.data) as ToWorker;
+      let m: ToWorker;
+      try {
+        m = JSON.parse(e.data) as ToWorker;
+      } catch {
+        return; // an unhandled throw in an async handler would kill the whole worker
+      }
       if (m.t === "status") {
         console.log(`hub says: ${m.state}`);
         if (m.state === "denied") Deno.exit(1);
       } else if (m.t === "job") {
+        if (active >= MAX_ACTIVE) {
+          send({ t: "result", id: m.id, ok: false, output: "worker is busy, try again in a moment" });
+          return;
+        }
+        active++;
         try {
-          const h = handlers[m.cmd];
+          // hasOwn: "constructor" or "toString" must not resolve to built-in functions
+          const h = Object.hasOwn(handlers, m.cmd) ? handlers[m.cmd] : undefined;
           if (!h) throw new Error(`unknown command: ${m.cmd}`);
           send({ t: "result", id: m.id, ok: true, output: await h(m.args) });
         } catch (err) {
           send({ t: "result", id: m.id, ok: false, output: (err as Error).message });
+        } finally {
+          active--;
         }
       }
     };

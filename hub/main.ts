@@ -38,10 +38,21 @@ function mutate(fn: (s: State) => void): Promise<void> {
 }
 
 const nodes = new Map<string, Node>();
-const jobs = new Map<string, (r: { ok: boolean; output: string }) => void>();
+// A pending job remembers which socket it was sent to, so a result can only come from that
+// worker, and so the job can be failed straight away if that worker disconnects.
+interface PendingJob {
+  ws: WebSocket;
+  done(r: { ok: boolean; output: string }): void;
+  fail(msg: string): void;
+}
+const jobs = new Map<string, PendingJob>();
 const activity: Activity[] = [];
 const seenUsers: Record<string, string> = {};
-const send = (ws: WebSocket, m: ToWorker) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
+const send = (ws: WebSocket, m: ToWorker): boolean => {
+  if (ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(m));
+  return true;
+};
 
 function applyApprovals() {
   for (const n of nodes.values()) {
@@ -99,12 +110,21 @@ function handleSocket(ws: WebSocket) {
         console.log(`[pending] ${node.name} wants to connect. Approve it in the dashboard, or: deno task admin approve ${id}`);
       }
     } else if (m.t === "result" && node?.approved) {
-      jobs.get(m.id)?.({ ok: m.ok, output: String(m.output).slice(0, 1500) });
-      jobs.delete(m.id);
+      const job = jobs.get(m.id);
+      if (job && job.ws === ws) {
+        jobs.delete(m.id);
+        job.done({ ok: m.ok === true, output: String(m.output).slice(0, 1500) });
+      }
     }
   };
 
   ws.onclose = () => {
+    for (const [id, job] of jobs) {
+      if (job.ws === ws) {
+        jobs.delete(id);
+        job.fail(`${node?.name ?? "node"} disconnected.`);
+      }
+    }
     if (node && nodes.get(node.id)?.ws === ws) {
       nodes.delete(node.id);
       console.log(`[node] ${node.name} (${node.id}) left`);
@@ -149,25 +169,32 @@ function runJob(cmd: string, args: string[] = [], opts: JobOpts = {}) {
   }
   if (target) {
     const t = target.trim().toLowerCase();
-    pool = pool.filter((n) => n.id === t || n.name.toLowerCase() === t);
+    // full id, an id prefix of 8+ chars (what Discord shows), or the node name
+    pool = pool.filter((n) => n.id === t || (t.length >= 8 && n.id.startsWith(t)) || n.name.toLowerCase() === t);
     if (!pool.length) return fail(`No online node matches "${target}" that you can use.`);
   }
   const node = pool[Math.floor(Math.random() * pool.length)];
   const id = crypto.randomUUID();
   const start = performance.now();
   return new Promise<{ node: NodeInfo; ok: boolean; output: string; ms: number }>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const failNow = (msg: string) => {
+      clearTimeout(timer);
       jobs.delete(id);
       log(node.name, false, Math.round(performance.now() - start));
-      reject(new Error(`${node.name} timed out.`));
-    }, timeoutMs);
-    jobs.set(id, (r) => {
-      clearTimeout(timer);
-      const ms = Math.round(performance.now() - start);
-      log(node.name, r.ok, ms);
-      resolve({ node: toInfo(node), ...r, ms });
+      reject(new Error(msg));
+    };
+    const timer = setTimeout(() => failNow(`${node.name} timed out.`), timeoutMs);
+    jobs.set(id, {
+      ws: node.ws,
+      fail: failNow,
+      done: (r) => {
+        clearTimeout(timer);
+        const ms = Math.round(performance.now() - start);
+        log(node.name, r.ok, ms);
+        resolve({ node: toInfo(node), ...r, ms });
+      },
     });
-    send(node.ws, { t: "job", id, cmd, args });
+    if (!send(node.ws, { t: "job", id, cmd, args })) failNow(`${node.name} is not connected.`);
   });
 }
 
