@@ -194,7 +194,7 @@ export async function handleDashboard(req: Request, url: URL, ctx: DashCtx): Pro
     try {
       const r = await ctx.runJob(command, args, {
         target: id,
-        timeoutMs: 60_000,
+        timeoutMs: 65_000,
         user: `${me.name} (dashboard)`,
         via: "dashboard",
       });
