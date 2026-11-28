@@ -26,7 +26,7 @@ It prints its node id and waits as `pending` until you approve it. Identity is a
 
 Safety: owners (`OWNER_IDS`, comma separated Discord user ids) can run anything a node provides. Everyone else can only run
 commands the owner whitelisted for that machine in the dashboard (default: `ping`, `sysinfo`), and only on machines they were granted.
-`/run` also needs the worker to opt in with `ALLOW_RUN=echo,df,uptime` (bare program names, no shell, 8s timeout).
+`/run` also needs the worker to opt in with `ALLOW_RUN=echo,df,uptime` (bare program names, no shell, 60s timeout).
 `/fetch` refuses localhost/private/LAN addresses and doesn't follow redirects.
 
 Add worker commands in `worker/commands.ts` (`handlers`) and the slash command in `hub/commands.ts`.
